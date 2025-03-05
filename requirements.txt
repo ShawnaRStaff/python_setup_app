@@ -1,0 +1,13 @@
+sqlalchemy
+alembic
+psycopg2-binary
+python-dotenv
+tqdm
+fastapi
+uvicorn
+pandas
+numpy
+openpyxl
+pytest
+pytest-cov
+pytest-postgresql
