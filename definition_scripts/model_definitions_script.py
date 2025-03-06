@@ -1,6 +1,7 @@
 # This script contains example model definitions for the SQLAlchemy models.
 # Modify the script to add or remove model definitions as needed.
-# The script is executed by the setup.py script to generate the model definitions in the models directory.
+# The script is executed by the setup.py module to generate the model definitions in the models directory.
+# The Tests that are written in the tests/test_models.py file are based on these model definitions.
 
 MODEL_DEFINITIONS_SCRIPT = {
     "models/__init__.py": '''from .base import Base
@@ -33,16 +34,17 @@ class Base:
 
 Base = declarative_base(cls=Base, metadata=metadata)''',
 
-    
-    "models/user.py": '''from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, PrimaryKeyConstraint
+    "models/user.py": '''from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, PrimaryKeyConstraint
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+import uuid
 from .base import Base
 
 class User(Base):
     __tablename__ = "user"
     
-    id = Column(Integer, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     username = Column(String(255), nullable=False, unique=True)
     password = Column(String(255), nullable=False)
@@ -66,16 +68,18 @@ class User(Base):
     def __repr__(self):
         return f"<User(id={self.id}, name='{self.name}', username='{self.username}')>"''',
 
-    "models/user_post.py": '''from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index, PrimaryKeyConstraint
+    "models/user_post.py": '''from sqlalchemy import Column, Boolean, String, Text, DateTime, ForeignKey, Index, PrimaryKeyConstraint
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+import uuid
 from .base import Base
 
 class UserPost(Base):
     __tablename__ = "user_post"
     
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("user.id"), nullable=False)
     title = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True) # for soft delete

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from ast import arg
 import os
 import shutil
 import subprocess
@@ -55,7 +54,6 @@ class ProjectSetup:
         if self.skip_import:
             logger.info("Data import will be skipped as requested")
 
-
     def run_command(self, command: List[str], cwd: str = None) -> None:
         """Run a command and log its output"""
         try:
@@ -75,30 +73,37 @@ class ProjectSetup:
             logger.error(f"Command failed: {e.stderr}")
             raise
 
-
     def create_virtual_environment(self) -> None:
         """Create virtual environment"""
         if not self.venv_path.exists():
             logger.info("Creating virtual environment...")
             self.run_command([self.python_cmd, "-m", "venv", str(self.venv_path)])
 
-
     def install_dependencies(self) -> None:
         """Install project dependencies"""
+        # update the requirements list as needed before running setup
         requirements = [
-            "sqlalchemy",
             "alembic",
-            "psycopg2-binary",
-            "python-dotenv",
-            "tqdm",
+            "bcrypt==4.0.1",
+            "cryptography",
             "fastapi",
-            "uvicorn",
-            "pandas",  # For data manipulation
+            "httpx",
             "numpy",   # Required by pandas
             "openpyxl",  # For Excel file support if needed
-            'pytest',
+            "pandas",  # For data manipulation
+            "passlib",
+            "psycopg[binary]",
+            "python-dotenv",
+            "python-jose",
+            "python-multipart",
+            "sqlalchemy",
+            "tqdm",
+            "uvicorn",
+            "pytest",
+            "pytest-asyncio",
             'pytest-cov',
             'pytest-postgresql',
+            "psycopg2-binary",
         ]
         
         logger.info("Installing dependencies...")
@@ -111,7 +116,6 @@ class ProjectSetup:
         with open(self.project_dir / "requirements.txt", "w") as f:
             f.write("\n".join(requirements))
 
-
     def create_project_structure(self) -> None:
         """Create project directory structure"""
         directories = [
@@ -119,7 +123,7 @@ class ProjectSetup:
             "scripts",
             "data",
             "models",
-            "tests",
+            "tests/integration_tests",
         ]
 
         logger.info("Creating project structure...")
@@ -128,7 +132,6 @@ class ProjectSetup:
 
     def create_files(self) -> None:
         """Create necessary project files"""
-        # Create model files
         logger.info("Creating model files...")
         for filepath, content in MODEL_DEFINITIONS_SCRIPT.items():
             full_path = self.project_dir / filepath
@@ -137,7 +140,6 @@ class ProjectSetup:
                 f.write(content)
             logger.info(f"Created {filepath}")
 
-        # Create data import files
         logger.info("Creating data import files...")
         for filepath, content in DATA_IMPORT_DEFINITION_SCRIPT.items():
             full_path = self.project_dir / filepath
@@ -146,8 +148,6 @@ class ProjectSetup:
                 f.write(content)
             logger.info(f"Created {filepath}")
 
-
-        # Define the content for db.py
         db_content = (
             'from sqlalchemy import create_engine\n'
             'from sqlalchemy.orm import sessionmaker, declarative_base\n'
@@ -193,7 +193,6 @@ class ProjectSetup:
             '    Base.metadata.create_all(bind=engine)\n'
         )
 
-        # Define the content for .env
         env_content = (
             f'DB_USER={self.db_user}\n'
             f'DB_PASSWORD={self.db_password}\n'
@@ -203,7 +202,6 @@ class ProjectSetup:
             'ENVIRONMENT=development\n'
         )
 
-        # Define the content for .gitignore
         gitignore_content = (
             '# Python\n'
             '__pycache__/\n'
@@ -229,34 +227,928 @@ class ProjectSetup:
             '# Virtual Environment\n'
             '.dme-env/\n'
             'venv/\n'
-            'ENV/\n\n'
+            'ENV/\n'
+            '*-venv/\n'
+            '.*-venv/\n\n'
             '# Environment Variables\n'
-            '.env\n\n'
+            '.env\n'
+            '.env.*\n\n'
             '# IDE\n'
             '.idea/\n'
             '.vscode/\n'
             '*.swp\n'
-            '*.swo\n\n'
+            '*.swo\n'
+            '.DS_Store\n\n'
             '# Database\n'
             '*.sqlite3\n'
-            '*.db\n\n'
+            '*.db\n'
+            '*.sqlite\n\n'
             '# Logs\n'
             '*.log\n'
-            'logs/\n'
-        )
+            'logs/\n\n'
+            '# Data\n'
+            'data/test.db\n'
+            'data/import/*.csv\n\n'
+            '# Test cache\n'
+            '.pytest_cache/\n'
+            '.coverage\n'
+            'htmlcov/\n'
+            'coverage.xml\n\n'
+            '# Temporary files\n'
+            'tmp/\n'
+            'temp/\n'
+            '*.tmp\n'
+            '*.bak\n'
+            )
 
-        # Create dictionary of files
+        test_utils_content = '''import pytest
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from ...models import Base
+
+
+data_dir = os.path.abspath('./data')  
+print(f"Using data directory: {data_dir}")
+
+os.makedirs(data_dir, exist_ok=True)
+
+TEST_DB_PATH = os.path.join(data_dir, "test.db")
+print(f"Database will be created at: {TEST_DB_PATH}")
+
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{TEST_DB_PATH}"
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
+
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base.metadata.create_all(bind=engine)
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@pytest.fixture(scope="function")
+def test_db():
+    """
+    Pytest fixture that provides a clean database for each test function,
+    but leaves the DB file intact for inspection after tests.
+    """
+    print(f"Using test database at: {TEST_DB_PATH}")
+    
+    # Create engine and session
+    test_engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        connect_args={"check_same_thread": False}
+    )
+    
+    TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    
+    with TestSession() as cleanup_session:
+        # Drop and recreate all tables to ensure a clean state
+        Base.metadata.drop_all(bind=test_engine)
+        Base.metadata.create_all(bind=test_engine)
+        cleanup_session.commit()
+    
+    db = TestSession()
+    try:
+        yield db
+    finally:
+        db.close()
+        test_engine.dispose()'''
+
+        test_user_content = '''import datetime
+from uuid import UUID
+from ...models import User
+from .utils import test_db  # Import the fixture directly from utils.py
+
+def test_create_user(test_db):
+    """Test creating a user in the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    # Act
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    created_user = db.query(User).filter(User.username == "testuser").first()
+    
+    # Assert
+    assert created_user is not None
+    assert created_user.name == "Test User"
+    assert created_user.email == "testuser@example.com"
+    assert created_user.is_active == True
+    assert isinstance(created_user.id, UUID)
+
+
+def test_get_user(test_db):
+    """Test getting a user from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",  
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+
+    # Act
+    user = db.query(User).filter(User.username == "testuser").first()
+
+    # Assert
+    assert user is not None
+    assert user.name == "Test User"
+    assert user.email == "testuser@example.com"
+    assert user.is_active == True
+    assert isinstance(user.id, UUID)
+
+
+def test_get_users(test_db):
+    """Test getting all users from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user1 = User(
+        name="Test User 1",
+        username="testuser1",
+        email="testuser1@email.com", 
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    test_user2 = User(
+        name="Test User 2",
+        username="testuser2",
+        email="testuser2@email.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    db.add(test_user1)
+    db.add(test_user2)
+    db.commit()
+    db.refresh(test_user1)
+    db.refresh(test_user2)
+
+    # Act
+    users = db.query(User).all()
+
+    # Assert
+    assert users is not None
+    assert len(users) >= 2
+    assert all(isinstance(user.id, UUID) for user in users)
+    assert all(user.is_active == True for user in users)
+
+
+def test_update_user(test_db):
+    """Test updating a user in the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser1@email.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+
+    # Act
+    test_user.name = "Updated Test User"
+    db.commit()
+    db.refresh(test_user)
+
+    updated_user = db.query(User).filter(User.username == "testuser").first()
+
+    # Assert
+    assert updated_user is not None
+    assert updated_user.name == "Updated Test User"
+    assert updated_user.email == "testuser1@email.com"
+    assert updated_user.is_active == True
+    assert isinstance(updated_user.id, UUID)
+
+
+def test_delete_user(test_db):
+    """Test deleting a user from the database"""
+    # Arrange
+    db = test_db
+    
+    # Create a new test user
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser1@email.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+
+    # Act
+    db.delete(test_user)
+    db.commit()
+
+    deleted_user = db.query(User).filter(User.username == "testuser").first()
+
+    # Assert
+    assert deleted_user is None
+
+
+def test_soft_delete_user(test_db):
+    """Test soft deleting a user from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser1@email.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+
+    # Act
+    test_user.is_active = False
+    db.commit()
+    db.refresh(test_user)
+
+    deleted_user = db.query(User).filter(User.username == "testuser").first()
+
+    # Assert
+    assert deleted_user is not None
+    assert deleted_user.is_active == False'''
+
+        testuser_post_content = '''import datetime
+from uuid import UUID
+from ...models import User, UserPost
+from .utils import test_db
+
+def test_create_post(test_db):
+    """Test creating a user post in the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Test Post Title",
+        content="This is a test post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    # Act
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    created_post = db.query(UserPost).filter(UserPost.title == "Test Post Title").first()
+    
+    # Assert
+    assert created_post is not None
+    assert created_post.title == "Test Post Title"
+    assert created_post.content == "This is a test post content."
+    assert created_post.user_id == test_user.id
+    assert created_post.is_active == True
+    assert isinstance(created_post.id, UUID)
+
+def test_get_post(test_db):
+    """Test getting a user post from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Test Post Title",
+        content="This is a test post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    # Act
+    post = db.query(UserPost).filter(UserPost.id == test_post.id).first()
+    
+    # Assert
+    assert post is not None
+    assert post.title == "Test Post Title"
+    assert post.content == "This is a test post content."
+    assert post.user_id == test_user.id
+    assert post.is_active == True
+    assert isinstance(post.id, UUID)
+
+def test_get_posts_by_user(test_db):
+    """Test getting all posts for a specific user"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+
+    test_post1 = UserPost(
+        user_id=test_user.id,
+        title="Test Post 1",
+        content="This is test post 1 content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    test_post2 = UserPost(
+        user_id=test_user.id,
+        title="Test Post 2",
+        content="This is test post 2 content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post1)
+    db.add(test_post2)
+    db.commit()
+    db.refresh(test_post1)
+    db.refresh(test_post2)
+    
+    # Act
+    user_posts = db.query(UserPost).filter(UserPost.user_id == test_user.id).all()
+    
+    # Assert
+    assert user_posts is not None
+    assert len(user_posts) == 2
+    assert all(post.user_id == test_user.id for post in user_posts)
+    assert all(isinstance(post.id, UUID) for post in user_posts)
+
+def test_get_posts(test_db):
+    """Test getting all posts from the database"""
+    # Arrange
+    db = test_db
+    
+
+    test_user1 = User(
+        name="Test User 1",
+        username="testuser1",
+        email="testuser1@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    test_user2 = User(
+        name="Test User 2",
+        username="testuser2",
+        email="testuser2@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user1)
+    db.add(test_user2)
+    db.commit()
+    db.refresh(test_user1)
+    db.refresh(test_user2)
+    
+    test_post1 = UserPost(
+        user_id=test_user1.id,
+        title="User 1 Post",
+        content="This is user 1's post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    test_post2 = UserPost(
+        user_id=test_user2.id,
+        title="User 2 Post",
+        content="This is user 2's post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post1)
+    db.add(test_post2)
+    db.commit()
+    db.refresh(test_post1)
+    db.refresh(test_post2)
+    
+    # Act
+    posts = db.query(UserPost).all()
+    
+    # Assert
+    assert posts is not None
+    assert len(posts) >= 2
+    assert all(isinstance(post.id, UUID) for post in posts)
+    assert all(post.is_active == True for post in posts)
+
+def test_update_post(test_db):
+    """Test updating a user post in the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Original Title",
+        content="Original content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    # Act
+    test_post.title = "Updated Title"
+    test_post.content = "Updated content."
+    db.commit()
+    db.refresh(test_post)
+    
+    updated_post = db.query(UserPost).filter(UserPost.id == test_post.id).first()
+    
+    # Assert
+    assert updated_post is not None
+    assert updated_post.title == "Updated Title"
+    assert updated_post.content == "Updated content."
+    assert updated_post.user_id == test_user.id
+    assert updated_post.is_active == True
+
+def test_delete_post(test_db):
+    """Test deleting a user post from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Test Post Title",
+        content="This is a test post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    # Act
+    db.delete(test_post)
+    db.commit()
+    
+    deleted_post = db.query(UserPost).filter(UserPost.id == test_post.id).first()
+    
+    # Assert
+    assert deleted_post is None
+
+def test_soft_delete_post(test_db):
+    """Test soft deleting a user post from the database"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Test Post Title",
+        content="This is a test post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    # Act
+    test_post.is_active = False
+    db.commit()
+    db.refresh(test_post)
+    
+    soft_deleted_post = db.query(UserPost).filter(UserPost.id == test_post.id).first()
+    
+    # Assert
+    assert soft_deleted_post is not None
+    assert soft_deleted_post.is_active == False
+
+def test_cascade_delete_posts(test_db):
+    """Test that posts are deleted when the user is deleted (cascade)"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post1 = UserPost(
+        user_id=test_user.id,
+        title="Test Post 1",
+        content="This is test post 1 content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    test_post2 = UserPost(
+        user_id=test_user.id,
+        title="Test Post 2",
+        content="This is test post 2 content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post1)
+    db.add(test_post2)
+    db.commit()
+    db.refresh(test_post1)
+    db.refresh(test_post2)
+    
+
+    posts_before = db.query(UserPost).filter(UserPost.user_id == test_user.id).all()
+    assert len(posts_before) == 2
+    
+    # Act 
+    db.delete(test_user)
+    db.commit()
+    
+    # Assert 
+    posts_after = db.query(UserPost).filter(UserPost.user_id == test_user.id).all()
+    assert len(posts_after) == 0
+
+def test_post_relationship_with_user(test_db):
+    """Test the relationship between User and UserPost models"""
+    # Arrange
+    db = test_db
+    
+    test_user = User(
+        name="Test User",
+        username="testuser",
+        email="testuser@example.com",
+        password="securepassword",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_user)
+    db.commit()
+    db.refresh(test_user)
+    
+    test_post = UserPost(
+        user_id=test_user.id,
+        title="Test Post Title",
+        content="This is a test post content.",
+        is_active=True,
+        created_at=datetime.datetime.now(),
+        updated_at=datetime.datetime.now()
+    )
+    
+    db.add(test_post)
+    db.commit()
+    db.refresh(test_post)
+    
+    # Act & Assert 
+    assert test_post.user is not None
+    assert test_post.user.id == test_user.id
+    assert test_post.user.username == "testuser"
+    
+    # Act & Assert 
+    user_with_posts = db.query(User).filter(User.id == test_user.id).first()
+    assert len(user_with_posts.posts) == 1
+    assert user_with_posts.posts[0].id == test_post.id
+    assert user_with_posts.posts[0].title == "Test Post Title"'''
+        
+        integration_test_readme_content = '''# Database Model Tests
+
+This directory contains integration tests for the example models defined in the `model_definitions_script` module. These tests validate the database models, their relationships, and interactions with the database.
+
+## Test Structure
+
+The tests are structured as integration tests that use a SQLite database for testing. Each test function creates a fresh database state, performs operations, and verifies the results.
+
+### Files
+
+- `utils.py` - Contains the test database setup and fixtures
+- `test_user.py` - Tests for the User model
+- `test_user_post.py` - Tests for the UserPost model and its relationship with User
+
+## Test Database
+
+Tests use SQLite with the following configuration:
+- A test database is created for each test function
+- Tables are dropped and recreated between tests
+- Database connections are properly closed after tests
+
+## Test Coverage
+
+These tests cover:
+
+### User Model
+- Creating users
+- Retrieving users (individual and all)
+- Updating user information
+- Hard deletion (removing from database)
+- Soft deletion (marking as inactive)
+
+### UserPost Model
+- Creating posts
+- Retrieving posts (individual, by user, and all)
+- Updating post content
+- Hard deletion
+- Soft deletion
+- Cascade deletion (when a user is deleted)
+- Relationship navigation between User and UserPost
+
+## Running Tests
+
+To run these tests:
+
+```bash
+pytest -xvs
+```
+
+Or to run specific test files:
+
+```bash
+pytest -xvs test_user.py
+pytest -xvs test_user_post.py
+```
+
+## Notes
+
+- These tests are integration tests rather than unit tests, as they test database interactions
+- The tests use the actual model definitions rather than mocks
+- SQLite is used for testing instead of PostgreSQL to simplify the test environment
+- Each test function receives a fresh database state via the `test_db` fixture
+
+## Models Tested
+
+These tests were specifically written for the example models in the `model_definitions_script` module, which includes:
+
+1. `User` - Represents application users with authentication information
+2. `UserPost` - Represents posts created by users
+
+The models include fields for:
+- UUID primary keys
+- Creation and update timestamps
+- Active status flags for soft deletion
+- Foreign key relationships between models'''
+
+        test_readme_content = '''# Tests Directory
+
+This directory contains tests for the application, organized into separate categories for different testing approaches.
+
+## Directory Structure
+
+```
+tests/
+├── integration_tests/  # Tests that validate multiple system components working together
+│   ├── test_user.py    # Integration tests for the User model
+│   ├── test_user_post.py  # Integration tests for the UserPost model
+│   └── utils.py        # Test fixtures and database setup for integration tests
+├── unit_tests/         # Tests for individual components in isolation (planned)
+└── README.md           # This file
+```
+
+## Test Categories
+
+### Integration Tests
+
+The `integration_tests` directory contains tests that verify multiple components working together, particularly focusing on database models, their relationships, and interactions with the database layer.
+
+Key features:
+- Tests use SQLite for a lightweight test database
+- Each test function gets a clean database state via fixtures
+- Tests validate CRUD operations, relationships, and business logic
+- Database connections are properly managed and cleaned up after tests
+
+See the [integration tests README](./integration_tests/README.md) for more specific details on these tests.
+
+### Unit Tests (Planned)
+
+The `unit_tests` directory will contain tests for individual components in isolation, with dependencies mocked or stubbed.
+
+Planned approach:
+- Pure function testing with controlled inputs and outputs
+- Mock external dependencies (database, services, etc.)
+- Focus on business logic rather than integration concerns
+- Fast execution for rapid feedback during development
+
+## Running Tests
+
+To run all tests:
+
+```bash
+pytest -xvs
+```
+
+To run only integration tests:
+
+```bash
+pytest -xvs integration_tests/
+```
+
+To run only unit tests (once implemented):
+
+```bash
+pytest -xvs unit_tests/
+```
+
+To run a specific test file:
+
+```bash
+pytest -xvs integration_tests/test_user.py
+```
+
+## Test Coverage
+
+Run tests with coverage reports:
+
+```bash
+pytest --cov=. --cov-report=term-missing
+```
+
+## Best Practices
+
+When adding new tests, follow these guidelines:
+
+1. **Unit tests** should:
+   - Test one function/method at a time
+   - Mock external dependencies
+   - Be fast and deterministic
+   - Focus on behavior rather than implementation details
+
+2. **Integration tests** should:
+   - Test components working together
+   - Use test databases rather than mocks when testing DB interactions
+   - Validate end-to-end flows through multiple layers
+   - Clean up created resources to ensure test isolation
+
+3. **General guidelines**:
+   - Each test should be independent and not rely on other tests
+   - Use descriptive test function names (`test_user_can_create_post`)
+   - Follow the Arrange-Act-Assert pattern
+   - Include both positive and negative test cases'''
+
+
         files = {
-            "db.py": db_content,
+            "data/__init__.py": "",
+            "data/db.py": db_content,
             ".env": env_content,
-            ".gitignore": gitignore_content
+            ".gitignore": gitignore_content,
+            "__init__.py": "",
+            "migrations/__init__.py": "",
+            "tests/__init__.py": "",
+            "tests/README.md": test_readme_content,
+            "tests/integration_tests/__init__.py": "",
+            "tests/integration_tests/utils.py": test_utils_content,
+            "tests/integration_tests/test_user.py": test_user_content,
+            "tests/integration_tests/test_post.py": testuser_post_content,
+            "tests/integration_tests/README.md": integration_test_readme_content,
         }
 
-        # Create each file
         logger.info("Creating project files...")
         for filename, content in files.items():
             filepath = self.project_dir / filename
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 f.write(content)
             logger.info(f"Created {filename}")
 
@@ -368,11 +1260,9 @@ formatter = generic
 format = %(levelname)-5.5s [%(name)s] %(message)s
 datefmt = %H:%M:%S'''
 
-            # Write alembic.ini to root directory
             with open(self.project_dir / "alembic.ini", "w") as f:
                 f.write(alembic_ini_content)
                 
-            # Create env.py with correct indentation
             env_py_content = '''from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -393,7 +1283,7 @@ import inspect
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import your models here
-from db import Base
+from data.db import Base
 from models import *
 
 # this is the Alembic Config object, which provides
@@ -693,7 +1583,6 @@ else:
             with open(alembic_dir / "env.py", "w") as f:
                 f.write(env_py_content)
                 
-            # Create script.py.mako
             script_mako_content = '''"""${message}
 
 Revision ID: ${up_revision}
@@ -808,22 +1697,19 @@ except Exception as e:
                 data_dir.mkdir(parents=True)
                 logger.info(f"Created data directory: {data_dir}")
                     
-            # Define base directory path from source_dir
             base_dir = Path(self.source_dir).absolute()
             
-            # Define auth_db and mapping directory paths
-            auth_db_dir = base_dir / "auth_db"
-            mapping_dir = base_dir / "mapping"
+            csv_dir = base_dir / "csvs" # update to match your project structure
+            mapping_dir = base_dir / "mapping" # update to match your project structure
             
             files_copied = False
             
-            # Copy auth_db CSV files
-            if not auth_db_dir.exists():
-                logger.warning(f"Auth DB directory does not exist: {auth_db_dir}")
+            if not csv_dir.exists():
+                logger.warning(f"CSV directory does not exist: {csv_dir}")
             else:
-                csv_files = list(auth_db_dir.glob("*.csv"))
+                csv_files = list(csv_dir.glob("*.csv"))
                 if not csv_files:
-                    logger.warning(f"No CSV files found in {auth_db_dir}")
+                    logger.warning(f"No CSV files found in {csv_dir}")
                 else:
                     for csv_file in csv_files:
                         dest_file = data_dir / csv_file.name
@@ -831,7 +1717,6 @@ except Exception as e:
                         logger.info(f"Copied {csv_file.name} to data directory")
                     files_copied = True
             
-            # Copy mapping CSV files
             if not mapping_dir.exists():
                 logger.warning(f"Mapping directory does not exist: {mapping_dir}")
             else:
@@ -870,196 +1755,208 @@ except Exception as e:
         except subprocess.CalledProcessError as e:
             logger.error(f"Data import failed: {str(e)}")
             raise
-    
+
     def add_erd_generation_function(self):
         """Add ERD generation functionality directly in the setup module"""
         logger.info("Adding ERD generation functionality...")
     
         erd_script_content = '''#!/usr/bin/env python3
-        """
-        ERD generator for PostgreSQL databases - creates a Mermaid diagram
-        with proper entity relationship display and formatting
-        """
+"""
+ERD generator for PostgreSQL databases - creates a Mermaid diagram
+with proper entity relationship display and formatting
+"""
 
-        import os
-        import sys
-        from pathlib import Path
-        import logging
-        import argparse
-        from sqlalchemy import create_engine, MetaData, inspect
-        from sqlalchemy.dialects.postgresql import UUID
-        from datetime import datetime
-        from dotenv import load_dotenv
-        import traceback
+import os
+import sys
+from pathlib import Path
+import logging
+import argparse
+from sqlalchemy import create_engine, MetaData, inspect
+from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime
+from dotenv import load_dotenv
+import traceback
 
-        # Setup logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[logging.StreamHandler()]
-        )
-        logger = logging.getLogger(__name__)
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-        def get_db_url_from_env():
-            """Get database URL from environment variables."""
-            load_dotenv()
-            
-            db_user = os.getenv('DB_USER', 'postgres')
-            db_password = os.getenv('DB_PASSWORD', 'postgres')
-            db_host = os.getenv('DB_HOST', 'localhost')
-            db_port = os.getenv('DB_PORT', '5432')
-            db_name = os.getenv('DB_NAME', 'mydb')
-            
-            logger.info(f"Using database connection: {db_host}:{db_port}/{db_name} (user: {db_user})")
-            
-            return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+def get_db_url_from_env():
+    """Get database URL from environment variables."""
+    load_dotenv()
+    
+    db_user = os.getenv('DB_USER', 'postgres')
+    db_password = os.getenv('DB_PASSWORD', 'postgres')
+    db_host = os.getenv('DB_HOST', 'localhost')
+    db_port = os.getenv('DB_PORT', '5432')
+    db_name = os.getenv('DB_NAME', 'mydb')
+    
+    logger.info(f"Using database connection: {db_host}:{db_port}/{db_name} (user: {db_user})")
+    
+    return f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
-        def format_column_type(column_type):
-            """Format column type to be more readable in the ERD"""
-            type_str = str(column_type).lower()
-            
-            # Map SQLAlchemy types to simpler display types
-            if 'varchar' in type_str or 'character varying' in type_str:
-                return 'string'
-            elif 'text' in type_str:
-                return 'string'
-            elif 'int' in type_str:
-                if 'bigint' in type_str:
-                    return 'bigint'
-                return 'integer'
-            elif 'bool' in type_str:
-                return 'boolean'
-            elif 'datetime' in type_str or 'timestamp' in type_str:
-                return 'timestamp'
-            elif 'double' in type_str or 'float' in type_str:
-                return 'double'
-            elif 'uuid' in type_str:
-                return 'uuid'
-            
-            # Default case
-            return type_str
+def format_column_type(column_type):
+    """Format column type to be more readable in the ERD"""
+    type_str = str(column_type).lower()
+    
+    # Map SQLAlchemy types to simpler display types
+    if 'varchar' in type_str or 'character varying' in type_str:
+        return 'string'
+    elif 'text' in type_str:
+        return 'string'
+    elif 'int' in type_str:
+        if 'bigint' in type_str:
+            return 'bigint'
+        return 'integer'
+    elif 'bool' in type_str:
+        return 'boolean'
+    elif 'datetime' in type_str or 'timestamp' in type_str:
+        return 'timestamp'
+    elif 'double' in type_str or 'float' in type_str:
+        return 'double'
+    elif 'uuid' in type_str:
+        return 'uuid'
+    
+    # Default case
+    return type_str
 
-        def generate_erd(db_url, output_path=None, exclude_tables=None):
-            """Generate ERD diagram using SQLAlchemy metadata reflection"""
-            if output_path is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_dir = Path('docs/erds')
-                output_dir.mkdir(parents=True, exist_ok=True)
-                output_path = output_dir / f"database_erd_{timestamp}.md"
+def generate_erd(db_url, output_path=None, exclude_tables=None):
+    """Generate ERD diagram using SQLAlchemy metadata reflection"""
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path('docs/erds')
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"database_erd_{timestamp}.md"
+    
+    exclude_tables = exclude_tables or ['alembic_version']
+    
+    logger.info("Connecting to database...")
+    engine = create_engine(db_url)
+    
+    try:
+        # Reflect database structure
+        logger.info("Reflecting database structure...")
+        metadata = MetaData()
+        metadata.reflect(bind=engine)
+        inspector = inspect(engine)
+        
+        # Filter out excluded tables
+        tables = [t for t in metadata.tables.values() 
+                  if t.name not in exclude_tables]
+        
+        # Start generating Mermaid diagram
+        mermaid_lines = ["# Database ERD Diagram", "", 
+                         f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "",
+                         "```mermaid", "erDiagram"]
+        
+        # Add tables with columns
+        for table in tables:
+            table_name = table.name
+            mermaid_lines.append(f"    {table_name} {{")
             
-            exclude_tables = exclude_tables or ['alembic_version']
-            
-            logger.info("Connecting to database...")
-            engine = create_engine(db_url)
-            
+            # Determine primary key columns
+            pk_columns = []
             try:
-                # Reflect database structure
-                logger.info("Reflecting database structure...")
-                metadata = MetaData()
-                metadata.reflect(bind=engine)
-                inspector = inspect(engine)
+                # First, try to get primary key from inspector
+                pk_constraint = inspector.get_pk_constraint(table_name)
                 
-                # Filter out excluded tables
-                tables = [t for t in metadata.tables.values() 
-                        if t.name not in exclude_tables]
-                
-                # Start generating Mermaid diagram
-                mermaid_lines = ["# Database ERD Diagram", "", 
-                                f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "",
-                                "```mermaid", "erDiagram"]
-                
-                # Add tables with columns
-                for table in tables:
-                    table_name = table.name
-                    mermaid_lines.append(f"    {table_name} {{")
-                    
-                    # Determine primary key columns
-                    pk_columns = []
-                    try:
-                        # First, try to get primary key from inspector
-                        pk_constraint = inspector.get_pk_constraint(table_name)
-                        
-                        # Handle different possible return types of pk_constraint
-                        if isinstance(pk_constraint, dict):
-                            pk_columns = pk_constraint.get('constrained_columns', [])
-                        elif isinstance(pk_constraint, list):
-                            pk_columns = pk_constraint
-                    except Exception as e:
-                        logger.warning(f"Could not retrieve primary key for {table_name} via inspector: {e}")
-                    
-                    # If no primary keys found, try to find UUID column
-                    if not pk_columns:
-                        pk_columns = [
-                            col.name for col in table.columns 
-                            if isinstance(col.type, UUID)
-                        ]
-                    
-                    # Add columns
-                    for column in table.columns:
-                        col_name = column.name
-                        col_type = format_column_type(column.type)
-                        
-                        # Format the column entry
-                        if col_name in pk_columns:
-                            mermaid_lines.append(f"        {col_type} {col_name} PK")
-                        else:
-                            mermaid_lines.append(f"        {col_type} {col_name}")
-                    
-                    mermaid_lines.append("    }")
-                
-                # Add relationships
-                for table in tables:
-                    table_name = table.name
-                    for fk in table.foreign_keys:
-                        target_table = fk.column.table.name
-                        if target_table in exclude_tables:
-                            continue
-                        
-                        source_col = fk.parent.name
-                        target_col = fk.column.name
-                        
-                        # Create relationship with the correct format
-                        rel_line = f"    {table_name} }}o--|| {target_table} : \\"FK {source_col} -> {target_col}\\""
-                        mermaid_lines.append(rel_line)
-                
-                # Write to file
-                logger.info(f"Writing ERD to {output_path}")
-                with open(output_path, 'w') as f:
-                    f.write("\\n".join(mermaid_lines))
-                
-                logger.info("ERD generation completed successfully!")
-                return output_path
-            
+                # Handle different possible return types of pk_constraint
+                if isinstance(pk_constraint, dict):
+                    pk_columns = pk_constraint.get('constrained_columns', [])
+                elif isinstance(pk_constraint, list):
+                    pk_columns = pk_constraint
             except Exception as e:
-                logger.error(f"Error generating ERD: {str(e)}")
-                # Log the full traceback for debugging
-                logger.error(traceback.format_exc())
-                raise
-            finally:
-                engine.dispose()
+                logger.warning(f"Could not retrieve primary key for {table_name} via inspector: {e}")
+            
+            # If no primary keys found, try to find UUID column
+            if not pk_columns:
+                pk_columns = [
+                    col.name for col in table.columns 
+                    if isinstance(col.type, UUID)
+                ]
+            
+            # Add columns
+            for column in table.columns:
+                col_name = column.name
+                col_type = format_column_type(column.type)
+                
+                # Format the column entry
+                if col_name in pk_columns:
+                    mermaid_lines.append(f"        {col_type} {col_name} PK")
+                else:
+                    mermaid_lines.append(f"        {col_type} {col_name}")
+            
+            mermaid_lines.append("    }")
+        
+        # Add relationships
+        for table in tables:
+            table_name = table.name
+            for fk in table.foreign_keys:
+                target_table = fk.column.table.name
+                if target_table in exclude_tables:
+                    continue
+                
+                source_col = fk.parent.name
+                target_col = fk.column.name
+                
+                # Create relationship with the correct format
+                rel_line = f"    {table_name} }}o--|| {target_table} : \\"FK {source_col} -> {target_col}\\""
+                mermaid_lines.append(rel_line)
+        
+        # Write to file
+        logger.info(f"Writing ERD to {output_path}")
+        with open(output_path, 'w') as f:
+            f.write("\\n".join(mermaid_lines))
+        
+        logger.info("ERD generation completed successfully!")
+        return output_path
+    
+    except Exception as e:
+        logger.error(f"Error generating ERD: {str(e)}")
+        # Log the full traceback for debugging
+        logger.error(traceback.format_exc())
+        raise
+    finally:
+        engine.dispose()
 
-        if __name__ == "__main__":
-            parser = argparse.ArgumentParser(description='Generate an ERD diagram from a PostgreSQL database')
-            parser.add_argument('--output', '-o', type=str, help='Output file path')
-            parser.add_argument('--exclude', '-e', type=str, nargs='+', default=['alembic_version'],
-                                help='Tables to exclude from the ERD')
-            args = parser.parse_args()
-            
-            try:
-                db_url = get_db_url_from_env()
-                output_path = generate_erd(db_url, args.output, args.exclude)
-                print(f"ERD diagram saved to: {output_path}")
-            except Exception as e:
-                print(f"Failed to generate ERD: {str(e)}")
-                sys.exit(1)
-        '''
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Generate an ERD diagram from a PostgreSQL database')
+    parser.add_argument('--output', '-o', type=str, help='Output file path')
+    parser.add_argument('--exclude', '-e', type=str, nargs='+', default=['alembic_version'],
+                        help='Tables to exclude from the ERD')
+    args = parser.parse_args()
+    
+    try:
+        db_url = get_db_url_from_env()
+        output_path = generate_erd(db_url, args.output, args.exclude)
+        print(f"ERD diagram saved to: {output_path}")
+    except Exception as e:
+        print(f"Failed to generate ERD: {str(e)}")
+        sys.exit(1)
+'''
     
         scripts_dir = self.project_dir / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
         
         with open(scripts_dir / "generate_erd.py", "w") as f:
             f.write(erd_script_content)
-        
+
+        init_content = '''
+from .data_import import import_data
+from .generate_erd import generate_erd
+
+__all__ = [
+    'import_data',
+    'generate_erd',
+]
+'''
+        with open(scripts_dir / "__init__.py", "w") as f:
+            f.write(init_content)
+    
         logger.info("ERD generation functionality added successfully")
 
     def setup(self) -> None:
@@ -1093,7 +1990,7 @@ except Exception as e:
             
             # Import data if not skipped
             if not self.skip_import:
-                # Check if we have CSV files before attempting import
+
                 data_dir = self.project_dir / "data" / "import"
                 has_csv_files = list(data_dir.glob("*.csv")) if data_dir.exists() else []
                 
@@ -1102,7 +1999,6 @@ except Exception as e:
                 else:
                     logger.warning("No CSV files found in data directory. Skipping import.")
             
-            # Initialize Git
             self.initialize_git()
             
             logger.info("Project setup completed successfully!")
@@ -1139,7 +2035,7 @@ def main():
                        help='PostgreSQL password (default: postgres)')
     
     parser.add_argument('--source_dir', '-s', type=str, default='../csvs/',
-                       help='Directory containing CSV files to copy to project data directory (default: ../csvs/)') # update parse arg with correct directory
+                       help='Directory containing CSV files to copy to project data directory (default: ../csvs/)')
     
     parser.add_argument('--skip_copy', '-sc', action='store_true',
                        help='Skip copying CSV files (default: False)')

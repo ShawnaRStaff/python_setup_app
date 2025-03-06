@@ -1,3 +1,9 @@
+# This script defines the data import script that will be used to import CSV data into the database.
+# The script is executed by the setup.py module to generate the data import script in the scripts directory.
+# Modify the script to customize the data import process as needed.
+# Data import step can be skipped using the -si flag 
+
+
 DATA_IMPORT_DEFINITION_SCRIPT = {
     "scripts/data_import.py": '''import os
 import sys
@@ -120,6 +126,8 @@ def import_data(csv_dir=None, truncate=False):
         
         # Second level - depends on first level
         ['user_post']
+
+        # Add more levels as needed
     ]
     
     # Map CSV file names to model classes
